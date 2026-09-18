@@ -10,6 +10,7 @@ function rule(id: string, name = id): Rule {
     method: 'ANY',
     host: 'example.com',
     pathTemplate: '/',
+    query: [],
     action: { type: 'rewrite', target: '/', status: 302 },
   };
 }
@@ -21,6 +22,29 @@ describe('rulesEqual / cloneRules', () => {
     const b = cloneRules(a);
     b[0].enabled = false;
     expect(rulesEqual(a, b)).toBe(false);
+  });
+
+  it('查询条件的内容差异会被识别（增删、改名、改操作符、改值）', () => {
+    const base = rule('a');
+    base.query = [{ name: 'env', op: 'equals', value: 'canary' }];
+    const same = cloneRules([base]);
+    expect(rulesEqual([base], same)).toBe(true);
+
+    const noConds = cloneRules([base]);
+    noConds[0].query = [];
+    expect(rulesEqual([base], noConds)).toBe(false);
+
+    const renamed = cloneRules([base]);
+    renamed[0].query[0].name = 'mode';
+    expect(rulesEqual([base], renamed)).toBe(false);
+
+    const reOp = cloneRules([base]);
+    reOp[0].query[0].op = 'exists';
+    expect(rulesEqual([base], reOp)).toBe(false);
+
+    const reValue = cloneRules([base]);
+    reValue[0].query[0].value = 'prod';
+    expect(rulesEqual([base], reValue)).toBe(false);
   });
 
   it('克隆出的快照与原数组相互独立', () => {

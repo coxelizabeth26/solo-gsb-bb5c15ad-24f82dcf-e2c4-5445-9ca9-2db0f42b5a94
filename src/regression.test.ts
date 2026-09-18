@@ -18,6 +18,7 @@ function rule(partial: Partial<Rule> & { id: string }): Rule {
     method: 'ANY',
     host: 'example.com',
     pathTemplate: '/',
+    query: [],
     action: { type: 'rewrite', target: '/', status: 302 },
     ...partial,
   };
@@ -307,6 +308,7 @@ describe('validateRegressionStore（持久化数据校验，损坏回退为空�
             method: 'GET',
             host: 'example.com',
             pathTemplate: '/a',
+            query: [],
             action: { type: 'redirect', target: 'https://n.com/', status: 301 },
           },
         ],

@@ -20,11 +20,21 @@ const rule = (id: string): Rule => ({
   method: 'ANY',
   host: 'api.example.com',
   pathTemplate: '/v1/users/:id',
+  query: [],
   action: { type: 'rewrite', target: '/v2/users/:id', status: 302 },
 });
 
 const payload: SharePayload = {
-  rules: [rule('r1'), rule('r2')],
+  rules: [
+    rule('r1'),
+    {
+      ...rule('r2'),
+      query: [
+        { name: 'env', op: 'equals', value: 'canary' },
+        { name: 'token', op: 'not-exists', value: '' },
+      ],
+    },
+  ],
   method: 'get',
   url: 'http://api.example.com/v1/users/42?debug=1',
 };

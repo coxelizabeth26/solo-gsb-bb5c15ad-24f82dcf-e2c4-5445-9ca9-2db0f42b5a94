@@ -31,9 +31,12 @@ npm run preview  # 预览构建产物
 | `method` | `ANY` 或具体方法（`GET` / `POST` / `PUT` / `PATCH` / `DELETE` / `HEAD` / `OPTIONS`） |
 | `host` | 精确主机（`example.com`）或通配子域（`*.example.com`，匹配任意层级子域但不含裸域）；`*` 匹配任意主机；忽略端口 |
 | `pathTemplate` | 路径模板，按 `/` 分段：字面段精确比较，`:name` 段捕获为路径参数；留空或 `*` 匹配任意路径；忽略末尾斜杠差异，匹配不看查询串 |
+| `query` | 查询参数条件数组，多条按 **AND（且）** 组合，为空表示任意查询串均可命中。每条条件：`name` 参数名（同一规则内不得重复）+ `op` 操作符——`exists`（参数出现即命中，含空值 `?x=`）、`not-exists`（参数完全不出现才命中）、`equals`（同名参数**任一值**等于 `value` 即命中，如 `?x=a&x=b` 命中 `x equals a`）。参数名与比较值按解码后的原文精确比较（区分大小写） |
 | `action.type` | `rewrite`（重写后继续匹配）/ `redirect`（立即终止）/ `stop`（立即终止请求） |
 | `action.target` | 重写 / 重定向目标，可引用路径参数（如 `/v2/users/:id`、`https://new.com/:id`）；以 `/` 开头替换路径，http(s) 绝对地址整体替换；目标不含 `?` 时保留原查询串 |
 | `action.status` | 重定向状态码：`301` / `302` / `303` / `307` / `308` |
+
+旧版本导出的规则 JSON 没有 `query` 字段，导入时自动按**空条件**（任意查询串均可命中）处理。
 
 ## 模拟语义
 
@@ -51,8 +54,8 @@ npm run preview  # 预览构建产物
 
 规则表每次变更（增删、排序、字段、启停）都会即时重新分析全部**已启用**规则：
 若某条规则的全部可匹配请求都被它**之前的某一条已启用规则**完全覆盖，
-该规则会被标记为**「不可达」**，并在卡片上列出首个遮蔽它的规则及三项覆盖依据
-（方法 / 主机 / 路径各自的覆盖关系）。
+该规则会被标记为**「不可达」**，并在卡片上列出首个遮蔽它的规则及四项覆盖依据
+（方法 / 主机 / 路径 / 查询条件各自的覆盖关系）。
 
 覆盖判定与模拟语义严格一致：
 
@@ -60,9 +63,12 @@ npm run preview  # 预览构建产物
 - **主机**：`*` 覆盖任意主机；`*.example.com` 只覆盖其至少一级子域
   （含更深层通配，如 `*.sub.example.com`），不覆盖裸域；
 - **路径**：空值或 `*` 覆盖任意路径；具体模板按分段比较，参数段覆盖同位任意单段，
-  字面段仅覆盖相同字面值。
+  字面段仅覆盖相同字面值；
+- **查询条件**：上方规则的每条条件都要被下方规则的某条同名条件**蕴含**——
+  「存在」被同名的「存在」或「值等于」蕴含，「不存在」仅被同名的「不存在」蕴含，
+  「值等于 v」仅被同名同值的「值等于」蕴含；上方规则无查询条件时覆盖任意条件组合。
 
-只报告**完整覆盖**——部分交集（例如主机相同但路径段数不同）不告警；
+只报告**完整覆盖**——部分交集（例如主机相同但路径段数不同、或查询条件取值不同）不告警；
 禁用规则不参与分析（既不遮蔽别人，也不被诊断）。
 诊断是纯分析提示，**不改变模拟执行结果**。
 
@@ -141,7 +147,22 @@ npm run preview  # 预览构建产物
     "method": "ANY",
     "host": "api.example.com",
     "pathTemplate": "/v1/users/:id",
+    "query": [],
     "action": { "type": "rewrite", "target": "/v2/users/:id", "status": 302 }
+  },
+  {
+    "id": "r1-gray",
+    "name": "灰度查询 env=canary 走灰度站",
+    "enabled": true,
+    "method": "ANY",
+    "host": "api.example.com",
+    "pathTemplate": "/internal/users/:id",
+    "query": [{ "name": "env", "op": "equals", "value": "canary" }],
+    "action": {
+      "type": "rewrite",
+      "target": "https://canary.example.com/users/:id",
+      "status": 302
+    }
   },
   {
     "id": "r2",
@@ -150,6 +171,7 @@ npm run preview  # 预览构建产物
     "method": "GET",
     "host": "blog.example.com",
     "pathTemplate": "/posts/:slug",
+    "query": [],
     "action": {
       "type": "redirect",
       "target": "https://www.example.com/blog/:slug",
@@ -163,21 +185,26 @@ npm run preview  # 预览构建产物
     "method": "ANY",
     "host": "internal.example.com",
     "pathTemplate": "/admin/:token",
+    "query": [],
     "action": { "type": "stop", "target": "", "status": 302 }
   }
 ]
 ```
+
+`query` 可省略（等价于空数组）；同一规则内参数名重复会在导入时报
+「第 N 条规则的查询条件存在重复参数名」定位错误。
 
 ## 导出可执行路由器
 
 点击规则表工具栏的「导出路由器」，可把当前**已启用**规则打包为单个
 `route-bundle.mjs`——自包含、零依赖（不引用项目源码与任何第三方包），
 对话框内提供代码预览、复制与下载。若某条已启用规则不合法（空主机、空目标、
-非法重定向状态码、无名参数段等），对话框会逐条列出「第 N 条规则」及原因，
-并阻止复制与下载，修正后即可导出。
+非法重定向状态码、无名参数段、查询条件参数名为空或重复等），对话框会逐条列出
+「第 N 条规则」及原因，并阻止复制与下载，修正后即可导出。
 
 生成物与调试台使用同一套语义：首条命中生效、重写后从第一条规则重新匹配、
-路径参数捕获替换、以「方法 + URL」检测循环、最多 20 步。
+路径参数捕获替换、查询参数条件（存在 / 不存在 / 值等于，AND 组合）、
+以「方法 + URL」检测循环、最多 20 步。
 
 **命令行运行（Node 20+）**：
 
@@ -235,12 +262,12 @@ console.log(result.status, result.finalUrl);
 
 ```
 src/
-├── engine.ts        # 匹配与模拟引擎（主机/路径匹配、参数替换、循环检测）
+├── engine.ts        # 匹配与模拟引擎（主机/路径/查询条件匹配、参数替换、循环检测）
 ├── engine.test.ts   # 引擎单元测试（vitest）
 ├── bundle.ts        # 导出可执行路由器：已启用规则校验定位 + 自包含 bundle 生成
 ├── bundle-template.mjs # 路由器模板（引擎纯 JS 版 + CLI 入口，规则数据生成时内嵌）
 ├── bundle.test.ts   # 生成物语义一致性 / CLI / 校验单元测试（vitest）
-├── shadow.ts        # 遮蔽诊断：方法/主机/路径覆盖判定与不可达规则分析
+├── shadow.ts        # 遮蔽诊断：方法/主机/路径/查询条件覆盖判定与不可达规则分析
 ├── shadow.test.ts   # 遮蔽诊断单元测试（vitest）
 ├── regression.ts    # 规则回归对比：基线冻结、结果判定、轨迹首个差异定位、持久化校验
 ├── regression.test.ts # 回归对比单元测试（vitest）

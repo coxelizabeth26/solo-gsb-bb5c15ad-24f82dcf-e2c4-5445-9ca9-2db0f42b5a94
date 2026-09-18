@@ -1,5 +1,5 @@
-import type { Rule } from './types';
-import { METHOD_MATCHERS, REDIRECT_STATUSES } from './types';
+import type { QueryCondition, Rule } from './types';
+import { METHOD_MATCHERS, QUERY_OPERATORS, REDIRECT_STATUSES } from './types';
 
 export function uid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -10,6 +10,37 @@ export function uid(): string {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * 校验并规范化一条规则的查询参数条件。
+ * 字段缺失（旧数据）时回退为空条件数组；参数名重复时抛出带位置信息的错误。
+ */
+function validateQuery(rawQuery: unknown, at: string): QueryCondition[] {
+  if (rawQuery === undefined) return [];
+  if (!Array.isArray(rawQuery)) throw new Error(`${at}的 query 必须是数组`);
+  const conds = rawQuery.map((rawCond, j) => {
+    const atCond = `${at}的第 ${j + 1} 条查询条件`;
+    if (!isRecord(rawCond)) throw new Error(`${atCond}不是对象`);
+    const name = rawCond.name ?? '';
+    if (typeof name !== 'string') throw new Error(`${atCond}的 name 必须是字符串`);
+    if (name.trim() === '') throw new Error(`${atCond}的参数名不能为空`);
+    const op = rawCond.op ?? 'exists';
+    if (typeof op !== 'string' || !(QUERY_OPERATORS as readonly string[]).includes(op)) {
+      throw new Error(`${atCond}的 op 必须是 ${QUERY_OPERATORS.join(' / ')} 之一`);
+    }
+    const value = rawCond.value ?? '';
+    if (typeof value !== 'string') throw new Error(`${atCond}的 value 必须是字符串`);
+    return { name: name.trim(), op: op as QueryCondition['op'], value };
+  });
+  const seen = new Set<string>();
+  for (const cond of conds) {
+    if (seen.has(cond.name)) {
+      throw new Error(`${at}的查询条件存在重复参数名「${cond.name}」`);
+    }
+    seen.add(cond.name);
+  }
+  return conds;
 }
 
 /**
@@ -39,6 +70,8 @@ export function validateRules(data: unknown): Rule[] {
       throw new Error(`${at}的 pathTemplate 必须是字符串`);
     }
 
+    const query = validateQuery(raw.query, at);
+
     const rawAction = raw.action ?? {};
     if (!isRecord(rawAction)) throw new Error(`${at}的 action 必须是对象`);
     const type = rawAction.type ?? 'rewrite';
@@ -67,6 +100,7 @@ export function validateRules(data: unknown): Rule[] {
       method: method as Rule['method'],
       host: typeof raw.host === 'string' ? raw.host : '',
       pathTemplate: typeof raw.pathTemplate === 'string' ? raw.pathTemplate : '',
+      query,
       action: { type, target, status },
     };
   });

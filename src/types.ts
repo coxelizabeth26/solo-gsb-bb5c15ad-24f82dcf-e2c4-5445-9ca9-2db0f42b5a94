@@ -16,6 +16,43 @@ export const REQUEST_METHODS = METHOD_MATCHERS.filter((m) => m !== 'ANY');
 
 export const REDIRECT_STATUSES = [301, 302, 303, 307, 308] as const;
 
+/** 查询参数条件的操作符：存在 / 不存在 / 值等于 */
+export const QUERY_OPERATORS = ['exists', 'not-exists', 'equals'] as const;
+export type QueryOperator = (typeof QUERY_OPERATORS)[number];
+
+export const QUERY_OPERATOR_LABELS: Record<QueryOperator, string> = {
+  exists: '存在',
+  'not-exists': '不存在',
+  equals: '值等于',
+};
+
+/** 一条查询参数条件：同一规则内的多条条件按 AND 组合 */
+export interface QueryCondition {
+  /** 查询参数名（区分大小写） */
+  name: string;
+  op: QueryOperator;
+  /** 仅 equals 使用的比较值；同名参数任一值相等即命中 */
+  value: string;
+}
+
+/** 单条查询条件的展示文本，如「存在 debug」「mode 等于 canary」 */
+export function formatQueryCondition(cond: QueryCondition): string {
+  switch (cond.op) {
+    case 'exists':
+      return `存在 ${cond.name}`;
+    case 'not-exists':
+      return `不存在 ${cond.name}`;
+    case 'equals':
+      return `${cond.name} 等于 ${cond.value}`;
+  }
+}
+
+/** 查询条件列表的展示文本；空列表表示「任意查询串」 */
+export function formatQueryConditions(conds: QueryCondition[]): string {
+  if (conds.length === 0) return '（无条件，任意查询串）';
+  return conds.map(formatQueryCondition).join(' 且 ');
+}
+
 export type ActionType = 'rewrite' | 'redirect' | 'stop';
 
 export interface RuleAction {
@@ -35,6 +72,8 @@ export interface Rule {
   host: string;
   /** 路径模板：字面段与 :name 参数段；留空或 * 匹配任意路径 */
   pathTemplate: string;
+  /** 查询参数条件：多条按 AND 组合；空数组表示任意查询串（旧数据缺省即为此） */
+  query: QueryCondition[];
   action: RuleAction;
 }
 

@@ -11,7 +11,8 @@
 //   const result = route('GET', 'http://api.example.com/v1/users/42');
 //
 // 语义与调试台引擎一致：首条命中生效；rewrite 应用后从第一条规则重新匹配；
-// 路径模板 :name 捕获并替换进目标；以「方法 + URL」为状态键检测循环；最多执行 20 步。
+// 路径模板 :name 捕获并替换进目标；查询参数条件按 AND 组合（存在 / 不存在 / 值等于）；
+// 以「方法 + URL」为状态键检测循环；最多执行 20 步。
 
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -84,6 +85,26 @@ function substitute(target, params) {
 }
 
 /**
+ * 查询参数条件匹配：同一规则的多条条件 AND 组合，全部满足才命中。
+ * - exists：参数出现即命中（含空值 `?x=`）；
+ * - not-exists：参数完全不出现才命中；
+ * - equals：同名参数的任一值与比较值相等即命中。
+ */
+function matchQuery(conditions, searchParams) {
+  for (const cond of conditions) {
+    const values = searchParams.getAll(cond.name);
+    if (cond.op === 'exists') {
+      if (values.length === 0) return false;
+    } else if (cond.op === 'not-exists') {
+      if (values.length > 0) return false;
+    } else if (cond.op === 'equals') {
+      if (!values.some((v) => v === cond.value)) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * 解析动作目标：
  * - 以 http(s):// 开头：整体替换 URL
  * - 以 / 开头：替换路径（保留当前源）
@@ -111,6 +132,7 @@ function findMatch(rules, method, url) {
     if (!matchHost(rule.host, url.hostname)) continue;
     const params = matchPath(rule.pathTemplate, url.pathname);
     if (params === null) continue;
+    if (!matchQuery(rule.query || [], url.searchParams)) continue;
     return { rule, index: i, params };
   }
   return null;

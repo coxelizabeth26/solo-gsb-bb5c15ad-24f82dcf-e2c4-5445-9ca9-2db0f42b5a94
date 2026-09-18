@@ -1,6 +1,12 @@
 import type { ChangeEvent } from 'react';
-import type { Rule } from '../types';
-import { METHOD_MATCHERS, REDIRECT_STATUSES } from '../types';
+import type { QueryCondition, QueryOperator, Rule } from '../types';
+import {
+  formatQueryConditions,
+  METHOD_MATCHERS,
+  QUERY_OPERATOR_LABELS,
+  QUERY_OPERATORS,
+  REDIRECT_STATUSES,
+} from '../types';
 import type { ShadowReport } from '../shadow';
 import type { TextSession } from './RulesPanel';
 
@@ -30,6 +36,19 @@ function fmtPath(template: string): string {
   return t === '' ? '（空，任意路径）' : t;
 }
 
+/** 同一规则内被重复使用的查询参数名（导入 / 导出路由器前会作为定位错误拦截） */
+function duplicateQueryNames(conds: QueryCondition[]): string[] {
+  const seen = new Set<string>();
+  const dup = new Set<string>();
+  for (const cond of conds) {
+    const name = cond.name.trim();
+    if (name === '') continue;
+    if (seen.has(name)) dup.add(name);
+    seen.add(name);
+  }
+  return [...dup];
+}
+
 export function RuleCard({
   rule,
   index,
@@ -44,6 +63,7 @@ export function RuleCard({
     onCommit({ ...rule, [key]: value });
   const setAction = (patch: Partial<Rule['action']>) =>
     onCommit({ ...rule, action: { ...rule.action, ...patch } });
+  const setQuery = (query: QueryCondition[]) => onCommit({ ...rule, query });
 
   /** 文本字段（name / host / pathTemplate）的连续输入合并为一步；失焦时 rule 已含最新输入 */
   const textProps = (key: 'name' | 'host' | 'pathTemplate') => ({
@@ -53,6 +73,28 @@ export function RuleCard({
       session.change({ ...rule, [key]: e.target.value }),
     onBlur: () => session.end(rule),
   });
+
+  /** 查询条件的参数名 / 比较值文本输入：同样按聚焦周期合并为一步 */
+  const condTextProps = (ci: number, key: 'name' | 'value') => ({
+    value: rule.query[ci][key],
+    onFocus: session.begin,
+    onChange: (e: ChangeEvent<HTMLInputElement>) =>
+      session.change({
+        ...rule,
+        query: rule.query.map((c, j) => (j === ci ? { ...c, [key]: e.target.value } : c)),
+      }),
+    onBlur: () => session.end(rule),
+  });
+
+  const setCondOp = (ci: number, op: QueryOperator) =>
+    setQuery(rule.query.map((c, j) => (j === ci ? { ...c, op } : c)));
+
+  const addCond = () =>
+    setQuery([...rule.query, { name: '', op: 'exists', value: '' }]);
+
+  const removeCond = (ci: number) => setQuery(rule.query.filter((_, j) => j !== ci));
+
+  const dupNames = duplicateQueryNames(rule.query);
 
   return (
     <div
@@ -171,6 +213,54 @@ export function RuleCard({
         )}
       </div>
 
+      <div className="query-conds">
+        <div className="query-conds-head">
+          <span>
+            查询参数条件（多条按「且」组合；为空则任意查询串均可命中）
+          </span>
+          <button onClick={addCond}>＋ 添加条件</button>
+        </div>
+        {rule.query.map((cond, ci) => (
+          <div className="query-cond-row" key={ci}>
+            <input
+              placeholder="参数名"
+              spellCheck={false}
+              {...condTextProps(ci, 'name')}
+            />
+            <select
+              value={cond.op}
+              onChange={(e) => setCondOp(ci, e.target.value as QueryOperator)}
+            >
+              {QUERY_OPERATORS.map((op) => (
+                <option key={op} value={op}>
+                  {QUERY_OPERATOR_LABELS[op]}
+                </option>
+              ))}
+            </select>
+            {cond.op === 'equals' && (
+              <input
+                placeholder="比较值（同名参数任一值相等即命中）"
+                spellCheck={false}
+                {...condTextProps(ci, 'value')}
+              />
+            )}
+            <button
+              className="danger"
+              title="删除该条件"
+              onClick={() => removeCond(ci)}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+        {dupNames.length > 0 && (
+          <div className="banner error">
+            查询条件存在重复参数名：{dupNames.map((n) => `「${n}」`).join('、')}
+            。同一规则内参数名必须唯一，否则导入校验与导出路由器会拦截。
+          </div>
+        )}
+      </div>
+
       {shadow && (
         <div className="shadow-detail">
           <div>
@@ -189,6 +279,10 @@ export function RuleCard({
             <li>
               路径 <code>{fmtPath(shadow.basis.path.upper)}</code> ⊇{' '}
               <code>{fmtPath(shadow.basis.path.lower)}</code>
+            </li>
+            <li>
+              查询 <code>{formatQueryConditions(shadow.basis.query.upper)}</code> ⊇{' '}
+              <code>{formatQueryConditions(shadow.basis.query.lower)}</code>
             </li>
           </ul>
         </div>

@@ -4,9 +4,10 @@ import {
   hostCovers,
   methodCovers,
   pathCovers,
+  queryCovers,
   ruleCovers,
 } from './shadow';
-import type { Rule } from './types';
+import type { QueryCondition, Rule } from './types';
 
 function rule(partial: Partial<Rule> & { id: string }): Rule {
   return {
@@ -15,9 +16,14 @@ function rule(partial: Partial<Rule> & { id: string }): Rule {
     method: 'ANY',
     host: 'example.com',
     pathTemplate: '/',
+    query: [],
     action: { type: 'rewrite', target: '/', status: 302 },
     ...partial,
   };
+}
+
+function cond(partial: Partial<QueryCondition> & { name: string }): QueryCondition {
+  return { op: 'exists', value: '', ...partial };
 }
 
 describe('methodCovers', () => {
@@ -117,14 +123,68 @@ describe('pathCovers', () => {
   });
 });
 
+describe('queryCovers', () => {
+  it('上层无条件（空数组）覆盖任意查询条件组合', () => {
+    expect(queryCovers([], [])).toBe(true);
+    expect(queryCovers([], [cond({ name: 'env', op: 'equals', value: 'canary' })])).toBe(true);
+    expect(queryCovers([], [cond({ name: 'token', op: 'not-exists' })])).toBe(true);
+  });
+
+  it('上层有条件时下层无条件：不覆盖', () => {
+    expect(queryCovers([cond({ name: 'debug' })], [])).toBe(false);
+  });
+
+  it('「存在」被同名的「存在」或「值等于」蕴含', () => {
+    const upper = [cond({ name: 'debug' })];
+    expect(queryCovers(upper, [cond({ name: 'debug' })])).toBe(true);
+    expect(queryCovers(upper, [cond({ name: 'debug', op: 'equals', value: '1' })])).toBe(true);
+    // 「不存在」与「存在」互斥，不蕴含
+    expect(queryCovers(upper, [cond({ name: 'debug', op: 'not-exists' })])).toBe(false);
+    // 参数名不同不蕴含
+    expect(queryCovers(upper, [cond({ name: 'other' })])).toBe(false);
+  });
+
+  it('「不存在」仅被同名的「不存在」蕴含', () => {
+    const upper = [cond({ name: 'token', op: 'not-exists' })];
+    expect(queryCovers(upper, [cond({ name: 'token', op: 'not-exists' })])).toBe(true);
+    expect(queryCovers(upper, [cond({ name: 'token' })])).toBe(false);
+    expect(queryCovers(upper, [cond({ name: 'token', op: 'equals', value: '' })])).toBe(false);
+  });
+
+  it('「值等于」仅被同名同值的「值等于」蕴含', () => {
+    const upper = [cond({ name: 'env', op: 'equals', value: 'canary' })];
+    expect(queryCovers(upper, [cond({ name: 'env', op: 'equals', value: 'canary' })])).toBe(true);
+    // 值不同：下层的命中不保证上层命中
+    expect(queryCovers(upper, [cond({ name: 'env', op: 'equals', value: 'prod' })])).toBe(false);
+    // 「存在」不蕴含具体取值
+    expect(queryCovers(upper, [cond({ name: 'env' })])).toBe(false);
+  });
+
+  it('多条上层条件须逐条被蕴含（AND 语义）', () => {
+    const upper = [
+      cond({ name: 'debug' }),
+      cond({ name: 'env', op: 'equals', value: 'canary' }),
+    ];
+    const lower = [
+      cond({ name: 'debug', op: 'equals', value: '1' }),
+      cond({ name: 'env', op: 'equals', value: 'canary' }),
+      cond({ name: 'extra', op: 'not-exists' }),
+    ];
+    expect(queryCovers(upper, lower)).toBe(true);
+    // 下层缺少 env 条件：只能保证 debug，不覆盖
+    expect(queryCovers(upper, [cond({ name: 'debug' })])).toBe(false);
+  });
+});
+
 describe('ruleCovers', () => {
-  it('三项同时覆盖才算完整覆盖', () => {
+  it('四项同时覆盖才算完整覆盖', () => {
     const upper = rule({ id: 'u', method: 'ANY', host: '*', pathTemplate: '' });
     const lower = rule({
       id: 'l',
       method: 'GET',
       host: 'api.example.com',
       pathTemplate: '/v1/users/:id',
+      query: [cond({ name: 'env', op: 'equals', value: 'canary' })],
     });
     expect(ruleCovers(upper, lower)).toBe(true);
   });
@@ -135,6 +195,7 @@ describe('ruleCovers', () => {
       method: 'GET',
       host: 'api.example.com',
       pathTemplate: '/v1/users/:id',
+      query: [],
     });
     expect(
       ruleCovers(rule({ id: 'u', method: 'POST', host: '*', pathTemplate: '' }), lower),
@@ -152,10 +213,30 @@ describe('ruleCovers', () => {
       ),
     ).toBe(false);
   });
+
+  it('查询维度不覆盖即不构成完整覆盖', () => {
+    const lower = rule({
+      id: 'l',
+      query: [cond({ name: 'env', op: 'equals', value: 'canary' })],
+    });
+    // 上层无条件：覆盖
+    expect(ruleCovers(rule({ id: 'u' }), lower)).toBe(true);
+    // 上层条件被下层蕴含（equals 蕴含 exists）：覆盖
+    expect(ruleCovers(rule({ id: 'u', query: [cond({ name: 'env' })] }), lower)).toBe(true);
+    // 上层要求 env=prod，下层只保证 env=canary：不覆盖
+    expect(
+      ruleCovers(
+        rule({ id: 'u', query: [cond({ name: 'env', op: 'equals', value: 'prod' })] }),
+        lower,
+      ),
+    ).toBe(false);
+    // 上层有条件、下层无条件：不覆盖
+    expect(ruleCovers(rule({ id: 'u', query: [cond({ name: 'debug' })] }), rule({ id: 'l2' }))).toBe(false);
+  });
 });
 
 describe('analyzeShadowing', () => {
-  it('完全相同的规则：后者被前者遮蔽，报告首个遮蔽者与三项依据', () => {
+  it('完全相同的规则：后者被前者遮蔽，报告首个遮蔽者与四项依据', () => {
     const rules = [
       rule({ id: 'r1', name: '旧接口', method: 'GET', host: 'api.example.com', pathTemplate: '/users/:id' }),
       rule({ id: 'r2', name: '旧接口副本', method: 'GET', host: 'api.example.com', pathTemplate: '/users/:id' }),
@@ -171,6 +252,57 @@ describe('analyzeShadowing', () => {
     expect(r.basis.method).toEqual({ upper: 'GET', lower: 'GET' });
     expect(r.basis.host).toEqual({ upper: 'api.example.com', lower: 'api.example.com' });
     expect(r.basis.path).toEqual({ upper: '/users/:id', lower: '/users/:id' });
+    expect(r.basis.query).toEqual({ upper: [], lower: [] });
+  });
+
+  it('无查询条件的在前规则遮蔽带查询条件的同路径规则，依据含查询维度', () => {
+    const rules = [
+      rule({ id: 'wide', host: 'api.example.com', pathTemplate: '/users/:id' }),
+      rule({
+        id: 'narrow',
+        host: 'api.example.com',
+        pathTemplate: '/users/:id',
+        query: [cond({ name: 'env', op: 'equals', value: 'canary' })],
+      }),
+    ];
+    const reports = analyzeShadowing(rules);
+    expect(reports.map((r) => r.ruleId)).toEqual(['narrow']);
+    expect(reports[0].byRuleId).toBe('wide');
+    expect(reports[0].basis.query).toEqual({
+      upper: [],
+      lower: [{ name: 'env', op: 'equals', value: 'canary' }],
+    });
+  });
+
+  it('部分交集不告警：带查询条件的在前规则遮蔽不了无条件的在后规则', () => {
+    const rules = [
+      rule({
+        id: 'gray',
+        host: 'api.example.com',
+        pathTemplate: '/users/:id',
+        query: [cond({ name: 'env', op: 'equals', value: 'canary' })],
+      }),
+      rule({ id: 'normal', host: 'api.example.com', pathTemplate: '/users/:id' }),
+    ];
+    expect(analyzeShadowing(rules)).toEqual([]);
+  });
+
+  it('查询条件被蕴含时构成遮蔽：equals 蕴含同名 exists', () => {
+    const rules = [
+      rule({ id: 'upper', query: [cond({ name: 'debug' })] }),
+      rule({ id: 'lower', query: [cond({ name: 'debug', op: 'equals', value: '1' })] }),
+    ];
+    const reports = analyzeShadowing(rules);
+    expect(reports.map((r) => r.ruleId)).toEqual(['lower']);
+    expect(reports[0].basis.query.upper).toEqual([{ name: 'debug', op: 'exists', value: '' }]);
+  });
+
+  it('查询条件值不同不告警：equals(canary) 遮蔽不了 equals(prod)', () => {
+    const rules = [
+      rule({ id: 'canary', query: [cond({ name: 'env', op: 'equals', value: 'canary' })] }),
+      rule({ id: 'prod', query: [cond({ name: 'env', op: 'equals', value: 'prod' })] }),
+    ];
+    expect(analyzeShadowing(rules)).toEqual([]);
   });
 
   it('更宽的在前规则遮蔽更窄的在后规则（ANY / * / 空路径）', () => {

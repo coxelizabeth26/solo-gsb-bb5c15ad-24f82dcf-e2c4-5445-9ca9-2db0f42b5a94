@@ -1,10 +1,24 @@
-import type { Rule } from './types';
+import type { QueryCondition, Rule } from './types';
 
 /** 历史栈上限：超过后丢弃最旧的一步 */
 const MAX_HISTORY = 200;
 
 export function cloneRules(rules: readonly Rule[]): Rule[] {
   return structuredClone(rules) as Rule[];
+}
+
+/** 查询条件列表的结构相等比较：逐条对比参数名、操作符与比较值 */
+function queryEqual(
+  a: readonly QueryCondition[],
+  b: readonly QueryCondition[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].name !== b[i].name || a[i].op !== b[i].op || a[i].value !== b[i].value) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -24,6 +38,7 @@ export function rulesEqual(a: readonly Rule[], b: readonly Rule[]): boolean {
       x.method !== y.method ||
       x.host !== y.host ||
       x.pathTemplate !== y.pathTemplate ||
+      !queryEqual(x.query ?? [], y.query ?? []) ||
       x.action.type !== y.action.type ||
       x.action.target !== y.action.target ||
       x.action.status !== y.action.status

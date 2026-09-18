@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { findBundleIssues, generateBundle } from './bundle';
 import { MAX_STEPS, simulate } from './engine';
 import { SAMPLE_RULES } from './samples';
-import type { Rule, Simulation } from './types';
+import type { QueryCondition, Rule, Simulation } from './types';
 
 function rule(partial: Partial<Rule> & { id: string }): Rule {
   return {
@@ -15,6 +15,7 @@ function rule(partial: Partial<Rule> & { id: string }): Rule {
     method: 'ANY',
     host: 'example.com',
     pathTemplate: '/',
+    query: [],
     action: { type: 'rewrite', target: '/', status: 302 },
     ...partial,
   };
@@ -102,6 +103,7 @@ describe('generateBundle', () => {
         id: 'tricky',
         name: '含 $& $\' $` 与 "引号" 的规则',
         pathTemplate: '/a',
+        query: [],
         action: { type: 'rewrite', target: '/b?x=$&', status: 302 },
       }),
     ];
@@ -145,6 +147,7 @@ describe('生成物与引擎语义一致', () => {
       rule({
         id: 'r1',
         pathTemplate: '/users/:id/files/:name',
+        query: [],
         action: { type: 'rewrite', target: '/internal/:id/:name', status: 302 },
       }),
     ];
@@ -170,6 +173,7 @@ describe('生成物与引擎语义一致', () => {
       rule({
         id: 'r1',
         pathTemplate: '/old/:slug',
+        query: [],
         action: { type: 'redirect', target: 'https://new.com/:slug', status: 301 },
       }),
     ];
@@ -198,6 +202,7 @@ describe('生成物与引擎语义一致', () => {
       rule({
         id: `r${i}`,
         pathTemplate: `/s${i}`,
+        query: [],
         action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
       }),
     );
@@ -229,6 +234,85 @@ describe('生成物与引擎语义一致', () => {
     expect(route('GET', 'http://example.com/p').status).toBe('final');
     // 方法小写输入统一按大写处理
     expect(route('post', 'http://example.com/p').status).toBe('stopped');
+  });
+
+  it('查询条件：存在 / 不存在 / 值等于与调试台引擎一致', async () => {
+    const rules = [
+      rule({
+        id: 'gray',
+        pathTemplate: '/a',
+        query: [{ name: 'env', op: 'equals', value: 'canary' }],
+        action: { type: 'rewrite', target: '/gray', status: 302 },
+      }),
+      rule({
+        id: 'no-token',
+        pathTemplate: '/a',
+        query: [{ name: 'token', op: 'not-exists', value: '' }],
+        action: { type: 'rewrite', target: '/bare', status: 302 },
+      }),
+      rule({
+        id: 'debug',
+        pathTemplate: '/a',
+        query: [{ name: 'debug', op: 'exists', value: '' }],
+        action: { type: 'rewrite', target: '/debug', status: 302 },
+      }),
+      rule({ id: 'fallback', pathTemplate: '/a', action: { type: 'rewrite', target: '/done', status: 302 } }),
+    ];
+    const route = await loadRoute(rules);
+    const cases: Array<[string, string, string]> = [
+      // [url, 期望命中的规则, 期望最终路径]
+      ['http://example.com/a?env=canary', 'gray', 'http://example.com/gray?env=canary'],
+      ['http://example.com/a?env=prod', 'no-token', 'http://example.com/bare?env=prod'],
+      ['http://example.com/a?env=canary&env=prod', 'gray', 'http://example.com/gray?env=canary&env=prod'],
+      ['http://example.com/a?token=t', 'fallback', 'http://example.com/done?token=t'],
+      ['http://example.com/a?token=t&debug=1', 'debug', 'http://example.com/debug?token=t&debug=1'],
+      ['http://example.com/a', 'no-token', 'http://example.com/bare'],
+    ];
+    for (const [url, hit, finalUrl] of cases) {
+      const method = 'GET';
+      const sim = route(method, url);
+      expectSameAsEngine(rules, sim, method, url);
+      expect(sim.steps[0].rule.id).toBe(hit);
+      expect(sim.finalUrl).toBe(finalUrl);
+    }
+  });
+
+  it('查询条件参与链式重写：重写保留查询串后继续按条件匹配', async () => {
+    const rules = [
+      rule({ id: 'r1', pathTemplate: '/a', action: { type: 'rewrite', target: '/b', status: 302 } }),
+      rule({
+        id: 'r2',
+        pathTemplate: '/b',
+        query: [{ name: 'debug', op: 'exists', value: '' }],
+        action: { type: 'rewrite', target: '/debug', status: 302 },
+      }),
+      rule({ id: 'r3', pathTemplate: '/b', action: { type: 'rewrite', target: '/done', status: 302 } }),
+    ];
+    const route = await loadRoute(rules);
+    const withDebug = route('GET', 'http://example.com/a?debug=1');
+    expectSameAsEngine(rules, withDebug, 'GET', 'http://example.com/a?debug=1');
+    expect(withDebug.steps.map((s) => s.rule.id)).toEqual(['r1', 'r2']);
+    expect(withDebug.finalUrl).toBe('http://example.com/debug?debug=1');
+    const plain = route('GET', 'http://example.com/a');
+    expectSameAsEngine(rules, plain, 'GET', 'http://example.com/a');
+    expect(plain.steps.map((s) => s.rule.id)).toEqual(['r1', 'r3']);
+    expect(plain.finalUrl).toBe('http://example.com/done');
+  });
+
+  it('查询条件中的特殊字符经 JSON 内嵌后语义不变', async () => {
+    const rules = [
+      rule({
+        id: 'tricky',
+        pathTemplate: '/a',
+        query: [{ name: 'q', op: 'equals', value: 'a b&c="d"' }],
+        action: { type: 'stop', target: '', status: 302 },
+      }),
+    ];
+    const route = await loadRoute(rules);
+    const hit = route('GET', 'http://example.com/a?q=a%20b%26c%3D%22d%22');
+    expectSameAsEngine(rules, hit, 'GET', 'http://example.com/a?q=a%20b%26c%3D%22d%22');
+    expect(hit.status).toBe('stopped');
+    expect(route('GET', 'http://example.com/a?q=other').status).toBe('final');
   });
 });
 
@@ -323,6 +407,44 @@ describe('findBundleIssues', () => {
     const rules = [
       rule({ id: 's', action: { type: 'stop', target: '', status: 302 } }),
       rule({ id: 'w', action: { type: 'rewrite', target: '/ok', status: 200 } }),
+    ];
+    expect(findBundleIssues(rules)).toEqual([]);
+  });
+
+  it('定位查询条件问题：重复参数名 / 空参数名 / 非法操作符', () => {
+    const rules = [
+      rule({ id: 'ok', query: [{ name: 'env', op: 'equals', value: 'canary' }] }),
+      rule({
+        id: 'dup',
+        name: '重复参数',
+        query: [
+          { name: 'env', op: 'exists', value: '' },
+          { name: 'env', op: 'equals', value: 'x' },
+        ],
+      }),
+      rule({ id: 'empty-name', name: '空参数名', query: [{ name: '  ', op: 'exists', value: '' }] }),
+      rule({ id: 'bad-op', name: '非法操作符', query: [{ name: 'a', op: 'like' as QueryCondition['op'], value: '' }] }),
+    ];
+    const issues = findBundleIssues(rules);
+    const byId = new Map(issues.map((i) => [i.ruleId, i]));
+    expect(byId.has('ok')).toBe(false);
+    expect(byId.get('dup')).toMatchObject({ index: 1, ruleName: '重复参数' });
+    expect(byId.get('dup')?.message).toContain('重复参数名「env」');
+    expect(byId.get('empty-name')).toMatchObject({ index: 2 });
+    expect(byId.get('empty-name')?.message).toContain('参数名不能为空');
+    expect(byId.get('bad-op')?.message).toContain('op');
+  });
+
+  it('未启用规则的重复参数名不阻止导出', () => {
+    const rules = [
+      rule({
+        id: 'off',
+        enabled: false,
+        query: [
+          { name: 'env', op: 'exists', value: '' },
+          { name: 'env', op: 'equals', value: 'x' },
+        ],
+      }),
     ];
     expect(findBundleIssues(rules)).toEqual([]);
   });

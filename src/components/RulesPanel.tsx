@@ -56,6 +56,7 @@ export function RulesPanel({ history, onShare }: Props) {
         method: 'ANY',
         host: 'example.com',
         pathTemplate: '/',
+        query: [],
         action: { type: 'rewrite', target: '/', status: 302 },
       },
     ]);

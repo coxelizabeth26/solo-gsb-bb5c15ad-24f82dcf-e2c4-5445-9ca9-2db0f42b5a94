@@ -56,7 +56,8 @@ export function BundleExportDialog({ rules, onClose }: Props) {
           打包为单个 <code>route-bundle.mjs</code>：不依赖项目源码与第三方包，
           可直接 <code>node route-bundle.mjs METHOD URL</code> 运行（Node 20+），
           也可 <code>import {'{ route }'}</code> 调用。语义与调试台一致：
-          首条命中、重写后从头匹配、路径参数替换、循环检测、20 步上限。
+          首条命中、重写后从头匹配、路径参数替换、查询参数条件（存在 / 不存在 / 值等于）、
+          循环检测、20 步上限。
         </p>
 
         {enabledCount === 0 && (
