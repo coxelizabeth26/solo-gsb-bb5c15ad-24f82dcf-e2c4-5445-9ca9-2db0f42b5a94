@@ -20,6 +20,7 @@ const rule = (id: string): Rule => ({
   method: 'ANY',
   host: 'api.example.com',
   pathTemplate: '/v1/users/:id',
+  query: [],
   action: { type: 'rewrite', target: '/v2/users/:id', status: 302 },
 });
 

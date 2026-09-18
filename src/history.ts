@@ -1,10 +1,22 @@
-import type { Rule } from './types';
+import type { QueryCondition, Rule } from './types';
 
 /** 历史栈上限：超过后丢弃最旧的一步 */
 const MAX_HISTORY = 200;
 
 export function cloneRules(rules: readonly Rule[]): Rule[] {
   return structuredClone(rules) as Rule[];
+}
+
+/** 查询条件数组的结构相等比较（顺序敏感：条件顺序影响展示，不影响匹配） */
+function queryEqual(
+  a: readonly QueryCondition[],
+  b: readonly QueryCondition[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((c, i) => {
+    const d = b[i];
+    return c.name === d.name && c.op === d.op && c.value === d.value;
+  });
 }
 
 /**
@@ -24,6 +36,7 @@ export function rulesEqual(a: readonly Rule[], b: readonly Rule[]): boolean {
       x.method !== y.method ||
       x.host !== y.host ||
       x.pathTemplate !== y.pathTemplate ||
+      !queryEqual(x.query, y.query) ||
       x.action.type !== y.action.type ||
       x.action.target !== y.action.target ||
       x.action.status !== y.action.status

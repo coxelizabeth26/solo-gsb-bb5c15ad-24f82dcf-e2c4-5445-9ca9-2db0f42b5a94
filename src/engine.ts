@@ -1,4 +1,4 @@
-import type { MatchResult, Rule, Simulation, Step } from './types';
+import type { MatchResult, QueryCondition, Rule, Simulation, Step } from './types';
 
 /** 单条模拟最多执行的规则命中次数 */
 export const MAX_STEPS = 20;
@@ -68,6 +68,34 @@ export function substitute(target: string, params: Record<string, string>): stri
 }
 
 /**
+ * 查询参数条件匹配：同一规则的多条条件按 AND 组合，空条件集匹配任意查询串。
+ * - exists：参数出现（至少一个值，空值也算出现）；
+ * - absent：参数不出现；
+ * - equals：同名参数的任一值与给定值相等即命中（重复参数取任一）。
+ * 参数名与值按 URLSearchParams 语义（解码后）比较。
+ */
+export function matchQuery(
+  conditions: readonly QueryCondition[],
+  searchParams: URLSearchParams,
+): boolean {
+  for (const c of conditions) {
+    const values = searchParams.getAll(c.name);
+    switch (c.op) {
+      case 'exists':
+        if (values.length === 0) return false;
+        break;
+      case 'absent':
+        if (values.length > 0) return false;
+        break;
+      case 'equals':
+        if (!values.some((v) => v === c.value)) return false;
+        break;
+    }
+  }
+  return true;
+}
+
+/**
  * 解析动作目标：
  * - 以 http(s):// 开头：整体替换 URL
  * - 以 / 开头：替换路径（保留当前源）
@@ -95,6 +123,7 @@ export function findMatch(rules: Rule[], method: string, url: URL): MatchResult 
     if (!matchHost(rule.host, url.hostname)) continue;
     const params = matchPath(rule.pathTemplate, url.pathname);
     if (params === null) continue;
+    if (!matchQuery(rule.query, url.searchParams)) continue;
     return { rule, index: i, params };
   }
   return null;

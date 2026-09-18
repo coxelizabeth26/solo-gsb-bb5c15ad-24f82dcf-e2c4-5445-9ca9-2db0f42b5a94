@@ -1,4 +1,5 @@
 import type { Simulation, Step } from '../types';
+import { formatQueryConditions } from '../types';
 import { MAX_STEPS } from '../engine';
 
 const ACTION_LABEL: Record<Step['rule']['action']['type'], string> = {
@@ -18,6 +19,14 @@ function hostOf(u: string): string {
 function pathOf(u: string): string {
   try {
     return new URL(u).pathname;
+  } catch {
+    return '?';
+  }
+}
+
+function searchOf(u: string): string {
+  try {
+    return new URL(u).search;
   } catch {
     return '?';
   }
@@ -54,6 +63,12 @@ export function StepCard({
           路径 <code>{pathOf(step.urlBefore)}</code> ✓ 匹配模板{' '}
           <code>{rule.pathTemplate.trim() === '' ? '（任意路径）' : rule.pathTemplate}</code>
         </li>
+        {rule.query.length > 0 && (
+          <li>
+            查询 <code>{searchOf(step.urlBefore) || '（空）'}</code> ✓ 满足{' '}
+            <code>{formatQueryConditions(rule.query)}</code>
+          </li>
+        )}
       </ul>
       {paramEntries.length > 0 && (
         <div className="params">

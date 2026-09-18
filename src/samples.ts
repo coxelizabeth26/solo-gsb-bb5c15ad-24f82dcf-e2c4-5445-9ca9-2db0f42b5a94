@@ -1,6 +1,6 @@
 import type { Rule } from './types';
 
-/** 内置示例规则：覆盖链式重写、重定向、通配子域、停止与循环演示 */
+/** 内置示例规则：覆盖链式重写、重定向、通配子域、查询条件、停止与循环演示 */
 export const SAMPLE_RULES: Rule[] = [
   {
     id: 'sample-1',
@@ -9,6 +9,7 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'ANY',
     host: 'api.example.com',
     pathTemplate: '/v1/users/:id',
+    query: [],
     action: { type: 'rewrite', target: '/v2/users/:id', status: 302 },
   },
   {
@@ -18,6 +19,7 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'ANY',
     host: 'api.example.com',
     pathTemplate: '/v2/users/:id',
+    query: [],
     action: { type: 'rewrite', target: '/internal/users/:id', status: 302 },
   },
   {
@@ -27,6 +29,7 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'GET',
     host: 'blog.example.com',
     pathTemplate: '/posts/:slug',
+    query: [],
     action: {
       type: 'redirect',
       target: 'https://www.example.com/blog/:slug',
@@ -40,6 +43,7 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'GET',
     host: '*.cdn.example.com',
     pathTemplate: '/assets/:file',
+    query: [],
     action: {
       type: 'rewrite',
       target: 'https://origin.example.com/static/:file',
@@ -53,7 +57,22 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'ANY',
     host: 'internal.example.com',
     pathTemplate: '/admin/:token',
+    query: [],
     action: { type: 'stop', target: '', status: 302 },
+  },
+  {
+    id: 'sample-8',
+    name: '灰度发布：debug=1 走灰度环境（查询条件）',
+    enabled: true,
+    method: 'GET',
+    host: 'gray.example.com',
+    pathTemplate: '/users/:id',
+    query: [{ name: 'debug', op: 'equals', value: '1' }],
+    action: {
+      type: 'rewrite',
+      target: 'https://gray-internal.example.com/users/:id',
+      status: 302,
+    },
   },
   {
     id: 'sample-6',
@@ -62,6 +81,7 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'ANY',
     host: 'loop.example.com',
     pathTemplate: '/a',
+    query: [],
     action: { type: 'rewrite', target: '/b', status: 302 },
   },
   {
@@ -71,6 +91,7 @@ export const SAMPLE_RULES: Rule[] = [
     method: 'ANY',
     host: 'loop.example.com',
     pathTemplate: '/b',
+    query: [],
     action: { type: 'rewrite', target: '/a', status: 302 },
   },
 ];
@@ -97,6 +118,11 @@ export const PRESETS: Preset[] = [
     label: '通配子域',
     method: 'GET',
     url: 'http://img.cdn.example.com/assets/logo.png',
+  },
+  {
+    label: '查询条件（debug=1 灰度）',
+    method: 'GET',
+    url: 'http://gray.example.com/users/7?debug=1',
   },
   {
     label: '停止动作',

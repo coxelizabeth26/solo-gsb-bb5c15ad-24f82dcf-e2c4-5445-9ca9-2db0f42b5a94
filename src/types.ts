@@ -18,6 +18,33 @@ export const REDIRECT_STATUSES = [301, 302, 303, 307, 308] as const;
 
 export type ActionType = 'rewrite' | 'redirect' | 'stop';
 
+/** 查询参数条件的操作符：存在 / 不存在 / 值等于 */
+export const QUERY_OPS = ['exists', 'absent', 'equals'] as const;
+export type QueryOp = (typeof QUERY_OPS)[number];
+
+export const QUERY_OP_LABEL: Record<QueryOp, string> = {
+  exists: '存在',
+  absent: '不存在',
+  equals: '值等于',
+};
+
+/** 一条查询参数条件；同一规则内的多条条件按 AND 组合 */
+export interface QueryCondition {
+  /** 参数名（按 URL 解码后的形态比较） */
+  name: string;
+  op: QueryOp;
+  /** 仅 op 为 equals 时使用：同名参数任一值等于它即命中 */
+  value: string;
+}
+
+/** 查询条件集的展示文本：「a 存在 且 b = 1」；空集表示任意查询串 */
+export function formatQueryConditions(conds: readonly QueryCondition[]): string {
+  if (conds.length === 0) return '（任意查询）';
+  return conds
+    .map((c) => (c.op === 'equals' ? `${c.name} = ${c.value}` : `${c.name} ${QUERY_OP_LABEL[c.op]}`))
+    .join(' 且 ');
+}
+
 export interface RuleAction {
   type: ActionType;
   /** 重写 / 重定向目标，可引用路径参数（如 /users/:id 或 https://a.com/:id）；stop 时忽略 */
@@ -35,6 +62,8 @@ export interface Rule {
   host: string;
   /** 路径模板：字面段与 :name 参数段；留空或 * 匹配任意路径 */
   pathTemplate: string;
+  /** 查询参数条件（AND 组合）；空数组匹配任意查询串。旧数据缺省为空 */
+  query: QueryCondition[];
   action: RuleAction;
 }
 

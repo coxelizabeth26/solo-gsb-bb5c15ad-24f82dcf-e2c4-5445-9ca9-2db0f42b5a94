@@ -15,6 +15,7 @@ function rule(partial: Partial<Rule> & { id: string }): Rule {
     method: 'ANY',
     host: 'example.com',
     pathTemplate: '/',
+    query: [],
     action: { type: 'rewrite', target: '/', status: 302 },
     ...partial,
   };
@@ -230,6 +231,76 @@ describe('生成物与引擎语义一致', () => {
     // 方法小写输入统一按大写处理
     expect(route('post', 'http://example.com/p').status).toBe('stopped');
   });
+
+  it('查询条件：存在 / 不存在 / 值等于与 AND 组合，结果与引擎一致', async () => {
+    const rules = [
+      rule({
+        id: 'gray',
+        pathTemplate: '/users/:id',
+        query: [
+          { name: 'debug', op: 'equals', value: '1' },
+          { name: 'legacy', op: 'absent', value: '' },
+        ],
+        action: { type: 'rewrite', target: '/gray/users/:id', status: 302 },
+      }),
+      rule({
+        id: 'has-token',
+        pathTemplate: '/users/:id',
+        query: [{ name: 'token', op: 'exists', value: '' }],
+        action: { type: 'rewrite', target: '/auth/users/:id', status: 302 },
+      }),
+      rule({
+        id: 'fallback',
+        pathTemplate: '/users/:id',
+        action: { type: 'rewrite', target: '/plain/users/:id', status: 302 },
+      }),
+    ];
+    const route = await loadRoute(rules);
+    const cases: Array<[string, string]> = [
+      ['GET', 'http://example.com/users/7?debug=1'],
+      ['GET', 'http://example.com/users/7?debug=1&debug=0'], // 任一值相等即命中
+      ['GET', 'http://example.com/users/7?debug=1&legacy=1'], // absent 条件不满足
+      ['GET', 'http://example.com/users/7?debug=0'],
+      ['GET', 'http://example.com/users/7?token=abc'],
+      ['GET', 'http://example.com/users/7?token='],
+      ['GET', 'http://example.com/users/7'],
+    ];
+    for (const [method, url] of cases) {
+      expectSameAsEngine(rules, route(method, url), method, url);
+    }
+    expect(route('GET', 'http://example.com/users/7?debug=1').finalUrl).toBe(
+      'http://example.com/gray/users/7?debug=1',
+    );
+    expect(route('GET', 'http://example.com/users/7?debug=1&legacy=1').finalUrl).toBe(
+      'http://example.com/plain/users/7?debug=1&legacy=1',
+    );
+    expect(route('GET', 'http://example.com/users/7?token=abc').finalUrl).toBe(
+      'http://example.com/auth/users/7?token=abc',
+    );
+    expect(route('GET', 'http://example.com/users/7').finalUrl).toBe(
+      'http://example.com/plain/users/7',
+    );
+  });
+
+  it('查询条件参与链式重写：重写后查询串保留并继续匹配', async () => {
+    const rules = [
+      rule({ id: 'r1', pathTemplate: '/a', action: { type: 'rewrite', target: '/b', status: 302 } }),
+      rule({
+        id: 'r2',
+        pathTemplate: '/b',
+        query: [{ name: 'debug', op: 'exists', value: '' }],
+        action: { type: 'rewrite', target: '/done', status: 302 },
+      }),
+    ];
+    const route = await loadRoute(rules);
+    for (const url of ['http://example.com/a?debug=1', 'http://example.com/a']) {
+      expectSameAsEngine(rules, route('GET', url), 'GET', url);
+    }
+    expect(route('GET', 'http://example.com/a?debug=1').finalUrl).toBe(
+      'http://example.com/done?debug=1',
+    );
+    expect(route('GET', 'http://example.com/a').finalUrl).toBe('http://example.com/b');
+  });
 });
 
 describe('CLI：node route-bundle.mjs METHOD URL', () => {
@@ -272,6 +343,40 @@ describe('CLI：node route-bundle.mjs METHOD URL', () => {
     const res = runCli(file, ['GET']);
     expect(res.code).toBe(1);
     expect(res.stderr).toContain('用法');
+  });
+
+  it('带查询条件的规则：CLI 与调试台引擎结果一致', () => {
+    const rules = [
+      rule({
+        id: 'gray',
+        host: 'api.example.com',
+        pathTemplate: '/users/:id',
+        query: [{ name: 'debug', op: 'equals', value: '1' }],
+        action: { type: 'rewrite', target: '/gray/users/:id', status: 302 },
+      }),
+      rule({
+        id: 'fallback',
+        host: 'api.example.com',
+        pathTemplate: '/users/:id',
+        action: { type: 'rewrite', target: '/plain/users/:id', status: 302 },
+      }),
+    ];
+    const file = writeBundle(rules);
+    for (const url of [
+      'http://api.example.com/users/7?debug=1',
+      'http://api.example.com/users/7?debug=0',
+    ]) {
+      const res = runCli(file, ['GET', url]);
+      expect(res.code).toBe(0);
+      const out = JSON.parse(res.stdout) as Simulation;
+      expect(JSON.parse(JSON.stringify(out))).toEqual(
+        JSON.parse(JSON.stringify(simulate(rules, 'GET', url))),
+      );
+    }
+    const hit = JSON.parse(
+      runCli(file, ['GET', 'http://api.example.com/users/7?debug=1']).stdout,
+    ) as Simulation;
+    expect(hit.finalUrl).toBe('http://api.example.com/gray/users/7?debug=1');
   });
 
   it('被 import 时不执行 CLI 逻辑', async () => {
@@ -323,6 +428,65 @@ describe('findBundleIssues', () => {
     const rules = [
       rule({ id: 's', action: { type: 'stop', target: '', status: 302 } }),
       rule({ id: 'w', action: { type: 'rewrite', target: '/ok', status: 200 } }),
+    ];
+    expect(findBundleIssues(rules)).toEqual([]);
+  });
+
+  it('合法查询条件无问题', () => {
+    const rules = [
+      rule({
+        id: 'ok',
+        query: [
+          { name: 'debug', op: 'equals', value: '1' },
+          { name: 'token', op: 'exists', value: '' },
+          { name: 'legacy', op: 'absent', value: '' },
+        ],
+      }),
+    ];
+    expect(findBundleIssues(rules)).toEqual([]);
+  });
+
+  it('定位查询条件问题：空参数名 / 非法操作符 / 重复参数名', () => {
+    const rules = [
+      rule({ id: 'ok', query: [{ name: 'a', op: 'exists', value: '' }] }),
+      rule({ id: 'empty-name', name: '空参数名', query: [{ name: ' ', op: 'exists', value: '' }] }),
+      rule({
+        id: 'bad-op',
+        name: '非法操作符',
+        query: [{ name: 'a', op: 'regex' as never, value: '' }],
+      }),
+      rule({
+        id: 'dup',
+        name: '重复参数',
+        query: [
+          { name: 'debug', op: 'exists', value: '' },
+          { name: 'env', op: 'equals', value: 'gray' },
+          { name: 'debug', op: 'equals', value: '1' },
+        ],
+      }),
+    ];
+    const issues = findBundleIssues(rules);
+    const byId = new Map(issues.map((i) => [i.ruleId, i]));
+    expect(byId.has('ok')).toBe(false);
+    expect(byId.get('empty-name')).toMatchObject({ index: 1, ruleName: '空参数名' });
+    expect(byId.get('empty-name')?.message).toContain('参数名不能为空');
+    expect(byId.get('bad-op')?.message).toContain('op');
+    expect(byId.get('dup')).toMatchObject({ index: 3, ruleName: '重复参数' });
+    expect(byId.get('dup')?.message).toBe(
+      '查询条件参数名「debug」重复（第 1 个与第 3 个条件）',
+    );
+  });
+
+  it('未启用规则的查询条件问题不参与校验', () => {
+    const rules = [
+      rule({
+        id: 'off',
+        enabled: false,
+        query: [
+          { name: 'a', op: 'exists', value: '' },
+          { name: 'a', op: 'equals', value: '1' },
+        ],
+      }),
     ];
     expect(findBundleIssues(rules)).toEqual([]);
   });

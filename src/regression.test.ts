@@ -18,6 +18,7 @@ function rule(partial: Partial<Rule> & { id: string }): Rule {
     method: 'ANY',
     host: 'example.com',
     pathTemplate: '/',
+    query: [],
     action: { type: 'rewrite', target: '/', status: 302 },
     ...partial,
   };
@@ -272,6 +273,30 @@ describe('runRegression（同一引擎分别运行基线与当前规则）', () 
     const [run] = runRegression([CASE], baselineRules, currentRules);
     expect(run.changed).toBe(false);
     expect(run.divergence).toBeNull();
+  });
+
+  it('新增查询条件：不满足条件的 URL 检出变化，满足的保持一致', () => {
+    const baselineRules = [
+      rule({ id: 'r1', pathTemplate: '/a', action: { type: 'rewrite', target: '/b', status: 302 } }),
+    ];
+    const currentRules = [
+      rule({
+        id: 'r1',
+        pathTemplate: '/a',
+        query: [{ name: 'debug', op: 'equals', value: '1' }],
+        action: { type: 'rewrite', target: '/b', status: 302 },
+      }),
+    ];
+    const missCase = { id: 'c-miss', method: 'GET', url: 'http://example.com/a' };
+    const hitCase = { id: 'c-hit', method: 'GET', url: 'http://example.com/a?debug=1' };
+    const [miss, hit] = runRegression([missCase, hitCase], baselineRules, currentRules);
+    // 不带 debug=1：基线命中重写到 /b，当前规则不再命中 → 有变化
+    expect(miss.changed).toBe(true);
+    expect(miss.baseline.finalUrl).toBe('http://example.com/b');
+    expect(miss.current.finalUrl).toBe('http://example.com/a');
+    // 带 debug=1：两侧行为一致 → 无变化
+    expect(hit.changed).toBe(false);
+    expect(hit.current.finalUrl).toBe('http://example.com/b?debug=1');
   });
 
   it('失败类型变化：final 变成 loop', () => {

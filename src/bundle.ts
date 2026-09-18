@@ -1,5 +1,5 @@
 import type { Rule } from './types';
-import { METHOD_MATCHERS, REDIRECT_STATUSES } from './types';
+import { METHOD_MATCHERS, QUERY_OPS, REDIRECT_STATUSES } from './types';
 import template from './bundle-template.mjs?raw';
 
 /** 模板中规则数据的占位符 */
@@ -42,6 +42,28 @@ export function findBundleIssues(rules: Rule[]): BundleIssue[] {
     if (segments.some((seg) => seg.startsWith(':') && seg.slice(1) === '')) {
       push(`pathTemplate「${rule.pathTemplate}」含有无名参数段「:」`);
     }
+
+    // 查询条件：参数名非空、操作符合法、equals 必须有字符串值；同一规则内参数名不得重复
+    const firstSeen = new Map<string, number>();
+    (rule.query ?? []).forEach((cond, j) => {
+      const atCond = `query 第 ${j + 1} 个条件`;
+      if (typeof cond.name !== 'string' || cond.name.trim() === '') {
+        push(`${atCond}的参数名不能为空`);
+        return;
+      }
+      if (!(QUERY_OPS as readonly string[]).includes(cond.op)) {
+        push(`${atCond}的 op「${cond.op}」必须是 ${QUERY_OPS.join(' / ')} 之一`);
+      }
+      if (cond.op === 'equals' && typeof cond.value !== 'string') {
+        push(`${atCond}（equals）的 value 必须是字符串`);
+      }
+      const first = firstSeen.get(cond.name);
+      if (first !== undefined) {
+        push(`查询条件参数名「${cond.name}」重复（第 ${first + 1} 个与第 ${j + 1} 个条件）`);
+      } else {
+        firstSeen.set(cond.name, j);
+      }
+    });
 
     const { type, target, status } = rule.action;
     if (type !== 'rewrite' && type !== 'redirect' && type !== 'stop') {

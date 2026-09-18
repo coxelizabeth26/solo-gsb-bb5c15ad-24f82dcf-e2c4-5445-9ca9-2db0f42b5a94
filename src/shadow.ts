@@ -1,4 +1,4 @@
-import type { MethodMatcher, Rule } from './types';
+import type { MethodMatcher, QueryCondition, Rule } from './types';
 import { matchHost } from './engine';
 
 /**
@@ -86,12 +86,38 @@ export function pathCovers(upper: string, lower: string): boolean {
   });
 }
 
-/** 规则级覆盖：方法、主机、路径三项同时覆盖才算完整覆盖 */
+/**
+ * 查询条件覆盖（upper 的条件集是否涵盖 lower 条件集能匹配的所有查询串）：
+ * 逐条检查 upper 的每个条件是否被 lower 的条件集蕴含（仅同名参数之间比较）：
+ * - upper「absent n」：仅 lower 也有「absent n」时成立；
+ * - upper「exists n」：lower 有「exists n」或「equals n」时成立（值等于蕴含存在）；
+ * - upper「equals n v」：仅 lower 有同值「equals n v」时成立。
+ * upper 为空条件集时覆盖任意 lower；lower 为空条件集时只被空 upper 覆盖。
+ */
+export function queryCovers(
+  upper: readonly QueryCondition[],
+  lower: readonly QueryCondition[],
+): boolean {
+  return upper.every((u) => {
+    const onName = lower.filter((c) => c.name === u.name);
+    switch (u.op) {
+      case 'absent':
+        return onName.some((c) => c.op === 'absent');
+      case 'exists':
+        return onName.some((c) => c.op === 'exists' || c.op === 'equals');
+      case 'equals':
+        return onName.some((c) => c.op === 'equals' && c.value === u.value);
+    }
+  });
+}
+
+/** 规则级覆盖：方法、主机、路径、查询条件四项同时覆盖才算完整覆盖 */
 export function ruleCovers(upper: Rule, lower: Rule): boolean {
   return (
     methodCovers(upper.method, lower.method) &&
     hostCovers(upper.host, lower.host) &&
-    pathCovers(upper.pathTemplate, lower.pathTemplate)
+    pathCovers(upper.pathTemplate, lower.pathTemplate) &&
+    queryCovers(upper.query, lower.query)
   );
 }
 
@@ -101,7 +127,7 @@ export interface CoverBasis<T> {
   lower: T;
 }
 
-/** 一条「不可达」诊断：被遮蔽规则、首个遮蔽它的规则，以及三项覆盖依据 */
+/** 一条「不可达」诊断：被遮蔽规则、首个遮蔽它的规则，以及四项覆盖依据 */
 export interface ShadowReport {
   ruleId: string;
   /** 被遮蔽规则在完整规则表中的下标 */
@@ -114,6 +140,7 @@ export interface ShadowReport {
     method: CoverBasis<MethodMatcher>;
     host: CoverBasis<string>;
     path: CoverBasis<string>;
+    query: CoverBasis<QueryCondition[]>;
   };
 }
 
@@ -144,6 +171,7 @@ export function analyzeShadowing(rules: Rule[]): ShadowReport[] {
             method: { upper: upper.rule.method, lower: lower.rule.method },
             host: { upper: upper.rule.host, lower: lower.rule.host },
             path: { upper: upper.rule.pathTemplate, lower: lower.rule.pathTemplate },
+            query: { upper: upper.rule.query, lower: lower.rule.query },
           },
         });
         break; // 只报告首个遮蔽它的规则
