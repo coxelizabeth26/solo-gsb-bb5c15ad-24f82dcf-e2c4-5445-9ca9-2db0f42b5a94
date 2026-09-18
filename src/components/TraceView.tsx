@@ -1,0 +1,133 @@
+import type { Simulation, Step } from '../types';
+import { MAX_STEPS } from '../engine';
+
+const ACTION_LABEL: Record<Step['rule']['action']['type'], string> = {
+  rewrite: '重写',
+  redirect: '重定向',
+  stop: '停止',
+};
+
+function hostOf(u: string): string {
+  try {
+    return new URL(u).hostname;
+  } catch {
+    return '?';
+  }
+}
+
+function pathOf(u: string): string {
+  try {
+    return new URL(u).pathname;
+  } catch {
+    return '?';
+  }
+}
+
+export function StepCard({
+  step,
+  showRuleId = false,
+}: {
+  step: Step;
+  /** 回归对比等场景需要按 rule.id 定位差异时开启 */
+  showRuleId?: boolean;
+}) {
+  const { rule } = step;
+  const paramEntries = Object.entries(step.params);
+  return (
+    <div className="step">
+      <header>
+        <span className="step-n">步骤 {step.n}</span>
+        命中规则 #{step.ruleIndex + 1}「{rule.name}」
+        <span className={`tag action-${rule.action.type}`}>
+          {ACTION_LABEL[rule.action.type]}
+        </span>
+      </header>
+      <ul className="conds">
+        <li>
+          方法 <code>{step.method}</code> ✓ 匹配{' '}
+          <code>{rule.method === 'ANY' ? 'ANY（任意方法）' : rule.method}</code>
+        </li>
+        <li>
+          主机 <code>{hostOf(step.urlBefore)}</code> ✓ 匹配 <code>{rule.host}</code>
+        </li>
+        <li>
+          路径 <code>{pathOf(step.urlBefore)}</code> ✓ 匹配模板{' '}
+          <code>{rule.pathTemplate.trim() === '' ? '（任意路径）' : rule.pathTemplate}</code>
+        </li>
+      </ul>
+      {paramEntries.length > 0 && (
+        <div className="params">
+          路径参数：
+          {paramEntries.map(([k, v]) => (
+            <span key={k} className="chip">
+              :{k} = {v}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="url-line">
+        <span className="url-from">{step.urlBefore}</span>
+        {rule.action.type === 'rewrite' && (
+          <>
+            <span className="arrow">→ 重写为</span>
+            <span className="url-to">{step.urlAfter}</span>
+          </>
+        )}
+        {rule.action.type === 'redirect' && (
+          <>
+            <span className="arrow">→ {step.status} 重定向到</span>
+            <span className="url-to">{step.location}</span>
+          </>
+        )}
+        {rule.action.type === 'stop' && <span className="arrow">→ 请求被停止</span>}
+      </div>
+      <div className="state-key">状态键：{step.stateKey}</div>
+      {showRuleId && <div className="state-key">规则 id：{rule.id}</div>}
+    </div>
+  );
+}
+
+const STATUS_META: Record<
+  Simulation['status'],
+  { cls: string; icon: string; title: string }
+> = {
+  final: { cls: 'ok', icon: '✅', title: '成功 · 得出最终 URL' },
+  redirect: { cls: 'ok', icon: '↪️', title: '成功 · 重定向终止' },
+  stopped: { cls: 'warn', icon: '⛔', title: '终止 · 规则停止' },
+  loop: { cls: 'error', icon: '🔁', title: '失败 · 检测到循环' },
+  'max-steps': { cls: 'error', icon: '⚠️', title: `失败 · 超过 ${MAX_STEPS} 步上限` },
+  'invalid-url': { cls: 'error', icon: '❌', title: '失败 · URL 无法解析' },
+  'invalid-target': { cls: 'error', icon: '❌', title: '失败 · 目标无法解析' },
+};
+
+export function TraceView({ sim }: { sim: Simulation }) {
+  const meta = STATUS_META[sim.status];
+  return (
+    <section className="panel">
+      <h2>执行轨迹（共 {sim.steps.length} 步）</h2>
+      {sim.steps.length === 0 && sim.status !== 'invalid-url' && (
+        <p className="empty">没有任何规则命中。</p>
+      )}
+      {sim.steps.map((s) => (
+        <StepCard key={s.n} step={s} />
+      ))}
+      <div className={`banner ${meta.cls}`}>
+        <strong>
+          {meta.icon} {meta.title}
+        </strong>
+        <p>{sim.reason}</p>
+        {sim.status === 'final' && sim.finalUrl && (
+          <p>
+            最终 URL：<code className="url-to">{sim.finalUrl}</code>
+          </p>
+        )}
+        {sim.status === 'redirect' && (
+          <p>
+            {sim.redirectStatus} Location：
+            <code className="url-to">{sim.redirectLocation}</code>
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
